@@ -131,19 +131,26 @@ def load_uk_chapter_notes(session: Session, client: RetryClient) -> None:
     Fetch all chapters and persist:
       • A NomenclatureNode (level=chapter).
       • A LegalNote for chapters with a chapter_note.
-    """
-    logger.info("UK — fetching chapters list")
-    resp = client.get_json("/api/v2/chapters")
-    chapters = resp.get("data", [])
 
-    for item in chapters:
-        attrs = item.get("attributes", {})
-        # goods_nomenclature_item_id is 10-digit padded, e.g. "0700000000"
-        item_id: str = attrs.get("goods_nomenclature_item_id", "")
-        chapter_code = item_id[:2] if len(item_id) >= 2 else item["id"].zfill(2)
+    Iterates chapters 01–99 directly using the canonical 2-digit chapter code
+    as the URL path parameter.  This avoids the list endpoint's internal IDs
+    (e.g. 29417) which are not the same as chapter numbers and cause 404s.
+    """
+    logger.info("UK — fetching chapters 01–99 from detail endpoint")
+    count = 0
+    for n in range(1, 100):
+        chapter_code = str(n).zfill(2)
+        try:
+            resp = client.get_json(f"/api/v2/chapters/{chapter_code}")
+        except Exception as exc:
+            # Chapters that don't exist in the UK tariff return 404 — normal.
+            logger.debug("Chapter %s not found (skipped): %s", chapter_code, exc)
+            continue
+
+        attrs = resp.get("data", {}).get("attributes", {})
         description = attrs.get("description", attrs.get("formatted_description", ""))
 
-        node = upsert_node(
+        upsert_node(
             session,
             code=chapter_code,
             level=NomenclatureLevel.CHAPTER,
@@ -154,31 +161,24 @@ def load_uk_chapter_notes(session: Session, client: RetryClient) -> None:
             valid_to=parse_date(attrs.get("validity_end_date")),
         )
 
-        # Chapter detail for notes — use the 2-digit chapter_code, NOT item['id']
-        # which is an internal JSON:API database ID, not the chapter number.
-        try:
-            detail = client.get_json(f"/api/v2/chapters/{chapter_code}")
-            d_attrs = detail.get("data", {}).get("attributes", {})
-            note_text: str | None = d_attrs.get("chapter_note") or d_attrs.get("formatted_chapter_note")
-            if note_text and note_text.strip():
-                # Classify note type: most chapter notes include both exclusions
-                # and inclusions.  Store as OTHER; the rules layer reads the
-                # full text and lets the LLM determine applicability.
-                upsert_note(
-                    session,
-                    jurisdiction=Jurisdiction.UK,
-                    scope=NoteScope.CHAPTER,
-                    scope_code=chapter_code,
-                    note_type=NoteType.OTHER,
-                    text=note_text.strip(),
-                )
-        except Exception as exc:
-            logger.warning("Could not fetch chapter detail %s: %s", item["id"], exc)
+        note_text: str | None = (
+            attrs.get("chapter_note") or attrs.get("formatted_chapter_note")
+        )
+        if note_text and note_text.strip():
+            upsert_note(
+                session,
+                jurisdiction=Jurisdiction.UK,
+                scope=NoteScope.CHAPTER,
+                scope_code=chapter_code,
+                note_type=NoteType.OTHER,
+                text=note_text.strip(),
+            )
 
         session.flush()
+        count += 1
 
     session.commit()
-    logger.info("UK — chapters done (%d)", len(chapters))
+    logger.info("UK — chapters done (%d found of 99)", count)
 
 
 # ---------------------------------------------------------------------------

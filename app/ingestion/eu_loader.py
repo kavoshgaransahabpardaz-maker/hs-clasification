@@ -49,22 +49,34 @@ logger = logging.getLogger(__name__)
 
 EU_DATA_PORTAL = "https://data.europa.eu"
 
-# Stable search URL for the TARIC open dataset on the EU Open Data Portal.
-TARIC_SEARCH_URL = (
-    "https://data.europa.eu/api/hub/search/datasets"
-    "?q=customs+tariff+TARIC&filter=publisher:publications-office-of-the-eu&limit=5"
-)
+# Discovery searches tried in order.  The Publications Office publishes the
+# Combined Nomenclature (CN) dataset which contains all commodity codes.
+_DISCOVERY_SEARCHES: list[str] = [
+    # Primary: search for Combined Nomenclature by Publications Office
+    (
+        "https://data.europa.eu/api/hub/search/datasets"
+        "?q=combined+nomenclature+CN&filter=publisher:publications-office-of-the-eu&limit=5"
+    ),
+    # Secondary: broader search for the annual CN regulation dataset
+    (
+        "https://data.europa.eu/api/hub/search/datasets"
+        "?q=combined+nomenclature+customs+tariff&limit=5"
+    ),
+    # Tertiary: TARIC keyword
+    (
+        "https://data.europa.eu/api/hub/search/datasets"
+        "?q=TARIC+nomenclature+commodity&filter=publisher:publications-office-of-the-eu&limit=5"
+    ),
+]
 
-# Direct TARIC nomenclature CSV as published by DG TAXUD.
-# This URL is updated periodically; the discovery step finds the current one.
-# Fallback URL — working as of spec publication date.
-TARIC_FALLBACK_NOMENCLATURE_URL = (
-    "https://ec.europa.eu/taxation_customs/dds2/taric/measures.jsp"
-    "?lang=EN&SimDate=&Area=&MeasType=&StartPub=&EndPub=&export=CSV"
+# The old DDS2 portal (ec.europa.eu/taxation_customs/dds2) was decommissioned.
+# If auto-discovery fails, download the CN CSV manually from:
+#   https://taxation-customs.ec.europa.eu/customs-4/calculation-customs-duties/customs-tariff/eu-customs-tariff-taric_en
+# and pass it with --eu-csv-path  (or docker compose --profile ingest with a volume mount).
+TARIC_MANUAL_DOWNLOAD_GUIDANCE = (
+    "https://taxation-customs.ec.europa.eu/customs-4/calculation-customs-duties"
+    "/customs-tariff/eu-customs-tariff-taric_en"
 )
-
-# The DG TAXUD TARIC XML download (full database refresh, ~monthly).
-TARIC_XML_BASE = "https://ec.europa.eu/taxation_customs/dds2/taric"
 
 BULK_COMMIT_EVERY = 500
 
@@ -76,35 +88,36 @@ BULK_COMMIT_EVERY = 500
 
 def _discover_taric_download_url(client: RetryClient) -> str | None:
     """
-    Query the EU Open Data Portal API to find the current TARIC CSV download.
+    Query the EU Open Data Portal API to find the current CN/TARIC CSV download.
 
-    Returns the first distribution URL whose format is CSV/text, or None if
-    discovery fails (caller uses the fallback URL).
+    Tries multiple search queries in order.  Returns the first distribution URL
+    whose format is CSV/text, or None if all strategies fail.
     """
-    try:
-        resp = client.get_json(TARIC_SEARCH_URL)
-    except Exception as exc:
-        logger.warning("EU Open Data Portal discovery failed: %s", exc)
-        return None
+    for search_url in _DISCOVERY_SEARCHES:
+        try:
+            resp = client.get_json(search_url)
+        except Exception as exc:
+            logger.debug("EU discovery search failed (%s): %s", search_url, exc)
+            continue
 
-    results: list[dict[str, Any]] = (
-        resp.get("result", {}).get("results", [])
-        or resp.get("datasets", [])
-        or []
-    )
+        results: list[dict[str, Any]] = (
+            resp.get("result", {}).get("results", [])
+            or resp.get("datasets", [])
+            or []
+        )
 
-    for dataset in results:
-        distributions = dataset.get("distributions", []) or dataset.get(
-            "result", {}
-        ).get("distributions", [])
-        for dist in distributions:
-            fmt = (dist.get("format") or "").upper()
-            url = dist.get("downloadURL") or dist.get("accessURL") or ""
-            if fmt in ("CSV", "TEXT/CSV") and url:
-                logger.info("EU TARIC download URL discovered: %s", url)
-                return url
+        for dataset in results:
+            distributions = dataset.get("distributions", []) or dataset.get(
+                "result", {}
+            ).get("distributions", [])
+            for dist in distributions:
+                fmt = (dist.get("format") or "").upper()
+                url = dist.get("downloadURL") or dist.get("accessURL") or ""
+                if fmt in ("CSV", "TEXT/CSV", "CSV/ZIP") and url:
+                    logger.info("EU CN/TARIC download URL discovered: %s", url)
+                    return url
 
-    logger.warning("Could not discover TARIC CSV download URL from portal")
+    logger.warning("Could not discover EU CN/TARIC CSV download URL from portal")
     return None
 
 
@@ -285,27 +298,32 @@ def run_eu_ingestion(session: Session) -> None:
         # Step 1: discover download URL
         csv_url = _discover_taric_download_url(client)
         if csv_url is None:
-            logger.warning(
-                "Using fallback TARIC URL — verify this is still current: %s",
-                TARIC_FALLBACK_NOMENCLATURE_URL,
+            raise RuntimeError(
+                "EU CN/TARIC CSV auto-discovery failed.\n\n"
+                "The old DDS2 portal (ec.europa.eu/taxation_customs/dds2) has been "
+                "decommissioned by the EU Commission.\n\n"
+                "Manual steps:\n"
+                f"  1. Visit: {TARIC_MANUAL_DOWNLOAD_GUIDANCE}\n"
+                "  2. Download the Combined Nomenclature CSV.\n"
+                "  3. Re-run ingestion with the file:\n"
+                "       docker compose --profile ingest run --rm \\\n"
+                "         -v /path/to/cn.csv:/data/cn.csv \\\n"
+                "         ingest python -m app.ingestion --steps nomenclature "
+                "--jurisdiction eu --eu-csv-path /data/cn.csv\n"
+                "  Or outside Docker:\n"
+                "       python -m app.ingestion --steps nomenclature "
+                "--jurisdiction eu --eu-csv-path /path/to/cn.csv"
             )
-            csv_url = TARIC_FALLBACK_NOMENCLATURE_URL
 
         # Step 2: download and parse CSV
-        logger.info("EU — downloading TARIC nomenclature from %s", csv_url)
+        logger.info("EU — downloading CN/TARIC nomenclature from %s", csv_url)
         try:
             csv_text = client.get_text(csv_url)
             reader = csv.DictReader(io.StringIO(csv_text))
             count = _ingest_csv_rows(reader, session)
             logger.info("EU — nomenclature ingestion done: %d rows", count)
         except Exception as exc:
-            logger.error(
-                "EU TARIC CSV download/parse failed: %s\n"
-                "Manual action: download the TARIC nomenclature CSV from "
-                "https://data.europa.eu and place it at data/taric_nomenclature.csv, "
-                "then rerun with --csv-path data/taric_nomenclature.csv",
-                exc,
-            )
+            logger.error("EU CN/TARIC CSV download/parse failed: %s", exc)
             raise
 
         # Step 3: chapter notes
