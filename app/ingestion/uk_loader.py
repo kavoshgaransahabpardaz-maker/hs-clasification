@@ -154,9 +154,10 @@ def load_uk_chapter_notes(session: Session, client: RetryClient) -> None:
             valid_to=parse_date(attrs.get("validity_end_date")),
         )
 
-        # Chapter detail for notes
+        # Chapter detail for notes — use the 2-digit chapter_code, NOT item['id']
+        # which is an internal JSON:API database ID, not the chapter number.
         try:
-            detail = client.get_json(f"/api/v2/chapters/{item['id']}")
+            detail = client.get_json(f"/api/v2/chapters/{chapter_code}")
             d_attrs = detail.get("data", {}).get("attributes", {})
             note_text: str | None = d_attrs.get("chapter_note") or d_attrs.get("formatted_chapter_note")
             if note_text and note_text.strip():
