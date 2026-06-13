@@ -1,0 +1,128 @@
+version: "3.9"
+
+# =============================================================================
+# HS Code Classification Service — Docker Compose
+#
+# Profiles:
+#   (default)  app + db
+#   --profile ingest   also starts the one-shot ingestion container
+#
+# Quick start:
+#   cp .env.example .env   # fill in OPENAI_API_KEY
+#   docker compose up -d
+#   docker compose logs -f app
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL with pgvector extension
+  # ---------------------------------------------------------------------------
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-hs_classification}
+      POSTGRES_USER:     ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"         # remove this line to keep DB private in production
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-hs_classification}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # API service
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL:          postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-hs_classification}
+      OPENAI_API_KEY:        ${OPENAI_API_KEY}
+      EMBEDDING_MODEL:       ${EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_DIM:         ${EMBEDDING_DIM:-1536}
+      LLM_MODEL:             ${LLM_MODEL:-gpt-4o}
+      PIPELINE_VERSION:      ${PIPELINE_VERSION:-0.1.0}
+      CONFIDENCE_THRESHOLD:  ${CONFIDENCE_THRESHOLD:-0.80}
+      RETRIEVAL_TOP_K:       ${RETRIEVAL_TOP_K:-10}
+      CALIBRATOR_PATH:       /app/data/calibrator.pkl
+    volumes:
+      # Persist the fitted calibrator across container restarts.
+      - calibrator_data:/app/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # One-shot ingestion container (run once after first boot)
+  # Usage: docker compose --profile ingest run --rm ingest
+  # ---------------------------------------------------------------------------
+  ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    profiles: ["ingest"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL:    postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-hs_classification}
+      OPENAI_API_KEY:  ${OPENAI_API_KEY}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_DIM:   ${EMBEDDING_DIM:-1536}
+      LLM_MODEL:       ${LLM_MODEL:-gpt-4o}
+    volumes:
+      # Mount local CSV files if you have them (optional):
+      # - ./data:/app/data:ro
+      - calibrator_data:/app/data
+    entrypoint: []
+    command: >
+      sh -c "
+        python -c 'from app.db import init_db; init_db()' &&
+        python -m app.ingestion --steps all --jurisdiction all
+      "
+
+  # ---------------------------------------------------------------------------
+  # One-shot calibration container (run after ingestion)
+  # Usage: docker compose --profile calibrate run --rm calibrate
+  # ---------------------------------------------------------------------------
+  calibrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    profiles: ["calibrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL:    postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-hs_classification}
+      OPENAI_API_KEY:  ${OPENAI_API_KEY}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      CALIBRATOR_PATH: /app/data/calibrator.pkl
+    volumes:
+      - calibrator_data:/app/data
+    entrypoint: []
+    command: python -m app.pipeline.calibration --method isotonic
+
+volumes:
+  postgres_data:
+  calibrator_data:
