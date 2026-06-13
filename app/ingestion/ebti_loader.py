@@ -132,6 +132,7 @@ _COL_ALIASES: dict[str, list[str]] = {
     ],
     "code": [
         "goods_nomenclature_item_id",
+        "nomenclature_code",       # EBTI-3 bulk export
         "cn_code",
         "taric_code",
         "commodity_code",
@@ -139,13 +140,26 @@ _COL_ALIASES: dict[str, list[str]] = {
         "tariff_code",
     ],
     "justification": [
+        "classification_justification",  # EBTI-3 bulk export
         "justification",
         "justification_text",
         "notes",
         "reasoning",
     ],
-    "valid_from": ["validity_start_date", "date_of_issue", "start_date", "valid_from"],
-    "valid_to": ["validity_end_date", "date_of_expiry", "end_date", "valid_to"],
+    "valid_from": [
+        "start_date_of_validity",  # EBTI-3 bulk export
+        "validity_start_date",
+        "date_of_issue",
+        "start_date",
+        "valid_from",
+    ],
+    "valid_to": [
+        "end_date_of_validity",    # EBTI-3 bulk export
+        "validity_end_date",
+        "date_of_expiry",
+        "end_date",
+        "valid_to",
+    ],
 }
 
 
@@ -220,13 +234,17 @@ def _ingest_csv_rows(reader: csv.DictReader, session: Session) -> tuple[int, int
 
     Returns (total_rows, eval_rows).
     """
+    # Normalise headers to lowercase so aliases match regardless of export casing.
+    if reader.fieldnames:
+        reader.fieldnames = [f.lower().strip() for f in reader.fieldnames]
+
     total = 0
     eval_count = 0
 
     for row in reader:
         reference = _col(row, "reference")
         description = _col(row, "description")
-        code = _col(row, "code")
+        code = _col(row, "code").rstrip("*")  # EBTI pads short codes with asterisks
 
         if not description or not code:
             continue

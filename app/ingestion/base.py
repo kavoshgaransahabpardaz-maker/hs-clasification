@@ -199,11 +199,22 @@ def upsert_note(
 
 
 def parse_date(value: Optional[str]) -> Optional[date]:
-    """Parse an ISO date string (YYYY-MM-DD) tolerantly; return None on failure."""
+    """Parse a date string tolerantly; return None on failure.
+
+    Accepts ISO format (YYYY-MM-DD) and European format (DD/MM/YYYY).
+    """
     if not value:
         return None
+    v = value.strip()
+    # DD/MM/YYYY (used by EBTI and some EU exports)
+    if len(v) >= 10 and v[2] == "/" and v[5] == "/":
+        try:
+            return date(int(v[6:10]), int(v[3:5]), int(v[0:2]))
+        except ValueError:
+            return None
+    # ISO: YYYY-MM-DD
     try:
-        return date.fromisoformat(value[:10])
+        return date.fromisoformat(v[:10])
     except ValueError:
         return None
 
