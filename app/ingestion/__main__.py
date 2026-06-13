@@ -107,17 +107,23 @@ def main() -> None:
         with get_session() as session:
             if do_eu:
                 log.info("=== M3: EBTI EU rulings ===")
-                if args.ebti_csv_path:
-                    run_ebti_ingestion_from_file(session, args.ebti_csv_path)
-                else:
-                    run_ebti_ingestion(session)
+                try:
+                    if args.ebti_csv_path:
+                        run_ebti_ingestion_from_file(session, args.ebti_csv_path)
+                    else:
+                        run_ebti_ingestion(session)
+                except Exception as exc:
+                    log.warning("EBTI ingestion failed (skipping): %s", exc)
 
             if do_uk:
                 log.info("=== M3: ATaR UK rulings ===")
-                if args.atar_csv_path:
-                    run_atar_ingestion_from_file(session, args.atar_csv_path)
-                else:
-                    run_atar_ingestion(session)
+                try:
+                    if args.atar_csv_path:
+                        run_atar_ingestion_from_file(session, args.atar_csv_path)
+                    else:
+                        run_atar_ingestion(session)
+                except Exception as exc:
+                    log.warning("ATaR ingestion failed (skipping): %s", exc)
 
     # ------------------------------------------------------------------
     # M3 — Embeddings

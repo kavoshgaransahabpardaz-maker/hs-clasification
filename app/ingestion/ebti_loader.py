@@ -43,11 +43,15 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-EU_DATA_PORTAL_SEARCH = (
-    "https://data.europa.eu/api/hub/search/datasets"
-    "?q=EBTI+binding+tariff+information&filter=publisher:"
-    "publications-office-of-the-eu&limit=5"
-)
+# The data.europa.eu /api/hub/search endpoint returns 400; try multiple URL formats.
+_EBTI_DISCOVERY_SEARCHES: list[str] = [
+    # New EU Open Data Portal search API
+    "https://data.europa.eu/api/hub/search/datasets?q=EBTI+binding+tariff&limit=5",
+    # Without filter parameter (old format with filter returns 400)
+    "https://data.europa.eu/api/hub/search/datasets?q=EBTI+tariff+information&limit=5",
+    # CKAN-compatible action API (used by some EU portals)
+    "https://data.europa.eu/api/action/package_search?q=EBTI&rows=5",
+]
 
 # Fraction of rulings held out as evaluation labels (not used for retrieval).
 EBTI_EVAL_FRACTION = 0.15
@@ -79,27 +83,29 @@ def _is_eval(reference: str, fraction: float = EBTI_EVAL_FRACTION) -> bool:
 
 def _discover_ebti_csv_url(client: RetryClient) -> str | None:
     """Query the EU Open Data Portal to find the current EBTI CSV download URL."""
-    try:
-        resp = client.get_json(EU_DATA_PORTAL_SEARCH)
-    except Exception as exc:
-        logger.warning("EBTI dataset discovery failed: %s", exc)
-        return None
-
-    results: list[dict[str, Any]] = (
-        resp.get("result", {}).get("results", [])
-        or resp.get("datasets", [])
-        or []
-    )
-    for dataset in results:
-        title = (dataset.get("title") or "").lower()
-        if "ebti" not in title and "binding tariff" not in title:
+    for search_url in _EBTI_DISCOVERY_SEARCHES:
+        try:
+            resp = client.get_json(search_url)
+        except Exception as exc:
+            logger.debug("EBTI discovery search failed (%s): %s", search_url, exc)
             continue
-        for dist in dataset.get("distributions", []):
-            fmt = (dist.get("format") or "").upper()
-            url = dist.get("downloadURL") or dist.get("accessURL") or ""
-            if fmt in ("CSV", "TEXT/CSV") and url:
-                logger.info("EBTI download URL discovered: %s", url)
-                return url
+
+        results: list[dict[str, Any]] = (
+            resp.get("result", {}).get("results", [])
+            or resp.get("results", {}).get("results", [])
+            or resp.get("datasets", [])
+            or []
+        )
+        for dataset in results:
+            title = (dataset.get("title") or "").lower()
+            if "ebti" not in title and "binding tariff" not in title:
+                continue
+            for dist in dataset.get("distributions", []):
+                fmt = (dist.get("format") or "").upper()
+                url = dist.get("downloadURL") or dist.get("accessURL") or ""
+                if fmt in ("CSV", "TEXT/CSV") and url:
+                    logger.info("EBTI download URL discovered: %s", url)
+                    return url
 
     logger.warning("Could not discover EBTI CSV URL from EU Open Data Portal")
     return None
@@ -271,12 +277,14 @@ def run_ebti_ingestion(session: Session) -> tuple[int, int]:
     with RetryClient(rate_delay=0.3) as client:
         csv_url = _discover_ebti_csv_url(client)
         if csv_url is None:
-            raise RuntimeError(
-                "Could not discover EBTI CSV URL.  "
-                "Download the dataset manually from "
-                "https://data.europa.eu (search 'EBTI binding tariff') "
-                "and use run_ebti_ingestion_from_file(session, path)."
+            logger.warning(
+                "Could not discover EBTI CSV URL — skipping EU rulings.\n"
+                "Download the dataset manually from:\n"
+                "  https://data.europa.eu/data/datasets/ebti-3\n"
+                "Then re-run with:\n"
+                "  --ebti-csv-path /path/to/ebti.csv"
             )
+            return 0, 0
         logger.info("EBTI — downloading from %s", csv_url)
         csv_text = client.get_text(csv_url)
 
