@@ -88,8 +88,7 @@ services:
       EMBEDDING_DIM:   ${EMBEDDING_DIM:-1536}
       LLM_MODEL:       ${LLM_MODEL:-gpt-4o}
     volumes:
-      # Mount local CSV files if you have them (optional):
-      # - ./data:/app/data:ro
+      - ./docs:/data:ro          # host docs/ → /data inside container (read-only)
       - calibrator_data:/app/data
     entrypoint: []
     command: >
