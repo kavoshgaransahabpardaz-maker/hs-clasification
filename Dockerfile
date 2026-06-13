@@ -59,11 +59,11 @@ RUN mkdir -p /app/data && chown appuser:appgroup /app/data
 USER appuser
 
 # Expose the uvicorn port.
-EXPOSE 8000
+EXPOSE 7000
 
 # Liveness probe target (used by docker-compose and orchestrators).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:7000/health || exit 1
 
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7000", "--workers", "2"]

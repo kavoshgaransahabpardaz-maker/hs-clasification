@@ -62,9 +62,9 @@ services:
       # Persist the fitted calibrator across container restarts.
       - calibrator_data:/app/data
     ports:
-      - "8000:8000"
+      - "7000:7000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:7000/health"]
       interval: 30s
       timeout: 5s
       retries: 3
