@@ -244,7 +244,10 @@ def _ingest_csv_rows(reader: csv.DictReader, session: Session) -> tuple[int, int
     for row in reader:
         reference = _col(row, "reference")
         description = _col(row, "description")
-        code = _col(row, "code").rstrip("*")  # EBTI pads short codes with asterisks
+        # EBTI pads codes with asterisks then appends additional-code digits.
+        # Split at first asterisk to get the base code, then cap at 10 digits
+        # (TARIC10) — additional-code suffixes beyond position 10 are discarded.
+        code = _col(row, "code").split("*")[0].strip()[:10]
 
         if not description or not code:
             continue
