@@ -258,6 +258,7 @@ def collect_calibration_data(
 
         except Exception as exc:
             logger.warning("Calibration data: error on ruling %d: %s", ruling.id, exc)
+            session.rollback()  # reset aborted transaction so the next ruling can query
 
         if (i + 1) % 20 == 0:
             n = len(scores)
