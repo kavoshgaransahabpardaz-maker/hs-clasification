@@ -229,9 +229,13 @@ def collect_calibration_data(
             profile = extract_profile(ruling.product_description)
             query_text = profile.query or ruling.product_description[:300]
 
+            # ruling.jurisdiction is a Jurisdiction enum; str() gives "Jurisdiction.EU"
+            # but the DB/pipeline expects the plain value "EU" / "UK".
+            jur = ruling.jurisdiction.value
+
             raw_candidates = retrieve_candidates(
                 query=query_text,
-                jurisdiction=str(ruling.jurisdiction),
+                jurisdiction=jur,
                 session=session,
                 embedder=embedder,
                 top_k=settings.retrieval_top_k,
@@ -240,8 +244,8 @@ def collect_calibration_data(
             if not raw_candidates:
                 continue
 
-            pruned, _ = apply_rules(profile, raw_candidates, str(ruling.jurisdiction), session)
-            valid = validate_candidates(pruned, str(ruling.jurisdiction), session)
+            pruned, _ = apply_rules(profile, raw_candidates, jur, session)
+            valid = validate_candidates(pruned, jur, session)
             ranked = rank_candidates(valid)
 
             if not ranked:
