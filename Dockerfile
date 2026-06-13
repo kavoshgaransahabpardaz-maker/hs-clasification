@@ -5,21 +5,17 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-# System deps needed to compile psycopg2-binary (already binary, but kept for
-# any future source builds) and general pip hygiene.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc \
-        libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+# All deps use pre-compiled binary wheels (psycopg2-binary, numpy,
+# scikit-learn) so no C compiler or libpq-dev is required here.
 
-# Copy only the files pip needs to resolve dependencies first (layer cache).
+# Copy only the manifest so pip's dependency resolver runs in a cached layer.
 COPY pyproject.toml ./
 
 # Create an isolated venv and install runtime deps (no dev extras).
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-RUN pip install --upgrade pip && \
+RUN pip install --upgrade pip --no-cache-dir && \
     pip install --no-cache-dir .
 
 
