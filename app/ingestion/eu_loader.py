@@ -412,49 +412,21 @@ def _ingest_csv_rows(reader: csv.DictReader, session: Session) -> int:  # type: 
 # annually as part of the Official Journal (EUR-Lex).  The TARIC export
 # sometimes includes them; if not, we fetch the summary page from DG TAXUD.
 
-EU_CN_NOTES_BASE = "https://ec.europa.eu/taxation_customs/dds2/taric"
-
-
 def load_eu_chapter_notes(session: Session, client: RetryClient) -> None:
     """
-    Attempt to load EU chapter notes from the TARIC consultation interface.
+    EU chapter notes are published in the Official Journal (EUR-Lex) and are
+    not available via a machine-readable API endpoint.
 
-    The endpoint at /taric/chapter_notes returns HTML/JSON depending on the
-    Accept header.  We request JSON where supported.
+    The old DDS2 endpoint (ec.europa.eu/taxation_customs/dds2/taric/chapter_notes/*)
+    was decommissioned by the EU Commission and now returns 502 for all chapters.
 
-    If the endpoint is unavailable, log a warning and continue — notes can be
-    re-ingested separately without reprocessing the full commodity list.
+    Chapter notes can be added manually via the admin interface if needed.
+    This function is a no-op kept for API compatibility.
     """
-    logger.info("EU — attempting to load chapter notes from TARIC interface")
-    for chapter_num in range(1, 98):
-        chapter_code = str(chapter_num).zfill(2)
-        url = f"{EU_CN_NOTES_BASE}/chapter_notes/{chapter_code}"
-        try:
-            resp = client.get(url, headers={"Accept": "application/json, text/html"})
-            content_type = resp.headers.get("content-type", "")
-            if "json" in content_type:
-                data = resp.json()
-                note_text = data.get("note") or data.get("text") or data.get("content", "")
-            else:
-                # Fall back to raw text (strip HTML tags roughly)
-                import re
-                note_text = re.sub(r"<[^>]+>", " ", resp.text).strip()
-
-            if note_text and len(note_text) > 20:
-                upsert_note(
-                    session,
-                    jurisdiction=Jurisdiction.EU,
-                    scope=NoteScope.CHAPTER,
-                    scope_code=chapter_code,
-                    note_type=NoteType.OTHER,
-                    text=note_text,
-                )
-                session.flush()
-        except Exception as exc:
-            logger.debug("No EU chapter note for chapter %s: %s", chapter_code, exc)
-
-    session.commit()
-    logger.info("EU — chapter notes load complete")
+    logger.info(
+        "EU — chapter notes skipped (DDS2 portal decommissioned; "
+        "add notes manually if required)"
+    )
 
 
 # ---------------------------------------------------------------------------
