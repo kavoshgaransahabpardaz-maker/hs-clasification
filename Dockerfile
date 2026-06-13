@@ -30,11 +30,9 @@ RUN groupadd --gid 1001 appgroup && \
 
 WORKDIR /app
 
-# Runtime system deps (libpq for psycopg2).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libpq5 \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
+# No apt-get needed:
+#   psycopg2-binary bundles libpq inside the wheel.
+#   Health check uses Python's built-in urllib (no curl required).
 
 # Copy the venv from the builder stage.
 COPY --from=builder /opt/venv /opt/venv
@@ -57,9 +55,9 @@ USER appuser
 # Expose the uvicorn port.
 EXPOSE 7000
 
-# Liveness probe target (used by docker-compose and orchestrators).
+# Liveness probe — uses Python's built-in urllib; no curl needed.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:7000/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7000/health')" || exit 1
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7000", "--workers", "2"]
